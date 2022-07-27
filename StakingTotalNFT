@@ -1,0 +1,182 @@
+// Faire le lien entre le NFT et le ERC20
+pragma solidity ^0.8.13;
+
+import "./StakingNFT.sol";
+import "./StakingNFTERC20.sol";
+
+contract NFTTotalStaking {
+
+uint public totalstaked; // Combien de NFT ont été stake. 
+
+struct Staking {
+    uint24 tokenId; // Id du NFT à stake
+    uint48 stakingStartTime; // Savoir QUAND le NFT est stake
+    address owner; // Savoir QUI est à stake
+}
+
+//TokenId => Staking
+mapping(uint => Staking) public NFTsStaked;
+address manager; 
+
+uint rewardPerHour = 10000; // 10000 jeton par heure de récompenses 
+
+StakingNFTERC20 token; // Lien de l'adresse du token
+StakingNFT nft ; // Lien de l'adresse de la collection NFT
+
+event Staked(address indexed owner, uint tokenId, uint value); // Address, ID, Time
+event unStaked(address indexed owner, uint tokenId, uint value); //
+event Claimed(address indexed owner, uint amount);// Demande sa part de jeton en echange du temps qu'il a été stake
+
+
+constructor(StakingNFTERC20 _token, StakingNFT _nft){
+    manager = msg.sender;
+    token = _token;
+    nft = _nft;
+}
+
+
+function claim(uint[] calldata tokenIds) external{
+    _claim(msg.sender, tokenIds, false);
+}
+
+function unStake(uint[] calldata tokenIds) external {
+    _claim(msg.sender, tokenIds, true);
+}
+
+
+
+function stake(uint[] calldata tokenIds) external {
+  uint tokenId; 
+  totalstaked += tokenIds.length;
+  for(uint i = 0; i < tokenIds.length; i++ ){
+     
+      tokenId = tokenIds[i]; 
+      require(nft.ownerOf(tokenId) == msg.sender, "Not the Owner");
+      require(NFTsStaked[tokenId].stakingStartTime == 0,"Already staked");
+      nft.transferFrom(msg.sender, address(this), tokenId); // Transfer du tokenId à ce SC.
+      emit Staked (msg.sender, tokenId, block.timestamp);
+
+      NFTsStaked[tokenId]= Staking({
+          tokenId: uint24(tokenId),
+          stakingStartTime : uint48(block.timestamp),
+          owner : msg.sender
+
+      });
+
+  }
+}
+
+  function unstaked(address owner, uint[] calldata tokenIds) internal {
+        uint tokenId; 
+        totalstaked -= tokenIds.length;
+
+
+      for(uint i = 0; i < tokenIds.length; i++ ){
+     
+      tokenId = tokenIds[i]; 
+      require(NFTsStaked[tokenId].owner == msg.sender, "Not the Owner");
+      emit unStaked(msg.sender, tokenId, block.timestamp);
+      delete NFTsStaked[tokenId]; // Supprimer la donnee du tokenId
+
+      nft.transferFrom(address(this), owner, tokenId);// On redonne au owner son NFT
+
+         }
+    }
+
+
+    function _claim(address owner, uint[] calldata tokenIds, bool _unstake) internal {
+
+            uint tokenId;
+            uint earned;// Combien le NFT nous rapporte
+            uint totalEarned; // Le total des NFT inscrits sur le tableau, ça rapporte
+
+            for(uint i = 0; i < tokenIds.length; i++ ){
+     
+            tokenId = tokenIds[i]; 
+            Staking memory thisStake = NFTsStaked[tokenId];
+            require(thisStake.owner == msg.sender, "Not the Owner");
+
+            uint stakingStartTime = thisStake.stakingStartTime;
+
+           // Calcul 10000/ 10**18 STK20 par heure et par NFT staked
+           
+           earned = ((block.timestamp - stakingStartTime)* rewardPerHour)/ 1 hours;
+           totalEarned += earned;
+
+           NFTsStaked[tokenId] = Staking({
+               tokenId: uint24(tokenId),
+               stakingStartTime: uint48(block.timestamp),
+               owner: owner
+           });
+         } 
+
+         if(totalEarned > 0){ 
+             token.mint(owner, totalEarned); // Récompense transférer à l'utilisateur
+         }
+
+         if(_unstake){
+            unstaked(owner, tokenIds); // Déclenchement du fonctionnement 
+         }
+
+         emit Claimed(owner, totalEarned);
+
+    }
+
+
+    function changeReward(uint _rewardPerHour) public {
+        require(manager == msg.sender);
+        rewardPerHour = _rewardPerHour;
+    }
+
+    // Affichage de la récompense pour l'utilisateur si il claime ses NFTs staked 
+
+    function getRewardAmount(address owner, uint[] calldata tokenIds) external view returns(uint)
+    {
+          
+            uint tokenId;
+            uint earned;// Combien le NFT nous rapporte
+            uint totalEarned; // Le total des NFT inscrits sur le tableau, ça rapporte
+
+            for(uint i = 0; i < tokenIds.length; i++ ){
+     
+            tokenId = tokenIds[i]; 
+            Staking memory thisStake = NFTsStaked[tokenId];
+            require(thisStake.owner == msg.sender, "Not the Owner");
+
+            uint stakingStartTime = thisStake.stakingStartTime;
+
+           // Calcul 10000/ 10**18 STK20 par heure et par NFT staked
+           
+           earned = ((block.timestamp - stakingStartTime)* rewardPerHour)/ 1 hours;
+           totalEarned += earned;     
+        
+        }
+
+            return totalEarned;
+    }
+    
+    // Affichage de la récompense sur le front. 
+
+    function tokenStakedbyOwner(address owner) public view returns (uint[] memory){
+      
+        uint totalSupply = nft.totalSupply();
+        uint[] memory tmp = new uint[](totalSupply);
+        uint index = 0;
+
+        for(uint i = 0;  i < totalSupply; i++){
+
+            if(NFTsStaked[i].owner == owner){ // Si le NFT est stake par le owner.
+              tmp[index] = i;
+              index++;
+              }
+            }
+
+
+        uint[] memory tokens = new uint[](index);
+        for(uint i = 0; i < index ; i++){
+                tokens[i] = tmp[i];
+            }
+         return tokens;
+    }
+
+}
